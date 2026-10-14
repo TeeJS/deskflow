@@ -11,6 +11,7 @@
 #include "base/BaseException.h"
 #include "base/String.h"
 #include "deskflow/IPlatformComputer.h"
+#include "deskflow/MonitorTypes.h"
 #include "deskflow/OptionTypes.h"
 #include "net/NetworkAddress.h"
 #include "server/InputFilter.h"
@@ -18,6 +19,7 @@
 #include <iosfwd>
 #include <map>
 #include <set>
+#include <vector>
 
 namespace deskflow::server {
 class Config;
@@ -250,6 +252,55 @@ public:
   */
   bool disconnect(const std::string &srcName, Direction srcSide, float position);
 
+  //! Link to or from one monitor of a computer
+  /*!
+  Written in the configuration as `left@2 = client` on the multi-monitor
+  computer, or `right = server@2` on a neighbour.  \c srcMonitor and
+  \c dstMonitor are 1-based indexes into that computer's monitor list in
+  IPrimaryComputer::monitors() order, or 0 when that end of the link is a
+  whole edge.  The intervals apply to the ends that are whole edges.  A
+  monitor link only becomes a connection once resolveMonitorLinks() has
+  been given the monitors.
+  */
+  struct MonitorLink
+  {
+    std::string srcName;
+    Direction srcSide = Direction::NoDirection;
+    int srcMonitor = 0;
+    Interval srcInterval = {0.0f, 1.0f};
+    std::string dstName;
+    int dstMonitor = 0;
+    Interval dstInterval = {0.0f, 1.0f};
+
+    bool operator==(const MonitorLink &) const = default;
+  };
+
+  //! Add a monitor link
+  /*!
+  Returns false if either computer is unknown or neither end names a
+  monitor.
+  */
+  bool addMonitorLink(const MonitorLink &link);
+
+  //! Resolve monitor links into connections
+  /*!
+  \c name is the computer whose monitors are \c monitors.  Every monitor
+  link is turned into a connection spanning the named monitor's part of
+  that computer's edge, replacing the connections made by any earlier
+  call.  Links that name a monitor on another computer, an index past the
+  end of \c monitors, or that would overlap an existing connection are
+  logged and skipped.  Returns the number of links resolved.
+  */
+  size_t resolveMonitorLinks(const std::string &name, const deskflow::MonitorList &monitors);
+
+  //! Split a trailing `@<n>` monitor reference off \c name
+  /*!
+  On success \c monitor is the 1-based index, or 0 when \c name had no
+  reference, and the reference is removed from \c name.  Returns false
+  when the text after `@` is not a positive integer.
+  */
+  static bool parseMonitorSuffix(std::string &name, int &monitor);
+
   //! Set server address
   /*!
   Set the deskflow listen addresses.  There is no default address so
@@ -386,6 +437,9 @@ public:
   */
   static const char *dirName(Direction);
 
+  //! Get monitor links
+  const std::vector<MonitorLink> &monitorLinks() const;
+
   //! Get interval as string
   /*!
   Returns an interval as a parseable string.
@@ -410,7 +464,13 @@ private:
   void parseComputers(const ConfigReadContext &, const std::string_view &, std::set<std::string> &computers) const;
 
 private:
+  // add a connection resolved from a monitor link, refusing overlaps
+  bool connectResolved(const MonitorLink &link, const Interval &src, const Interval &dst);
+
   CellMap m_map;
+  // connections resolved from m_monitorLinks; rebuilt by resolveMonitorLinks()
+  CellMap m_resolved;
+  std::vector<MonitorLink> m_monitorLinks;
   NameMap m_nameToCanonicalName;
   NetworkAddress m_deskflowAddress;
   ScreenOptions m_globalOptions;

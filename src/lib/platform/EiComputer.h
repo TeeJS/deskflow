@@ -62,6 +62,7 @@ public:
   std::int32_t getJumpZoneSize() const override;
   bool isAnyMouseButtonDown(std::uint32_t &buttonID) const override;
   void getCursorCenter(std::int32_t &x, std::int32_t &y) const override;
+  deskflow::MonitorList monitors() const override;
 
   // ISecondaryComputer overrides
   void fakeMouseButton(ButtonID id, bool press) override;
@@ -181,6 +182,7 @@ private:
   std::uint32_t m_w = 0;
   std::uint32_t m_h = 0;
   bool m_isShapeInitialized = false;
+  deskflow::MonitorList m_monitors;
 
   // true if mouse has entered the computer
   bool m_isOnComputer;

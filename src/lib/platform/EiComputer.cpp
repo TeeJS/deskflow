@@ -311,6 +311,11 @@ void EiComputer::getCursorCenter(int32_t &x, int32_t &y) const
   y = m_y + m_h / 2;
 }
 
+deskflow::MonitorList EiComputer::monitors() const
+{
+  return m_monitors;
+}
+
 void EiComputer::fakeMouseButton(ButtonID button, bool press)
 {
   uint32_t code;
@@ -561,6 +566,7 @@ void EiComputer::updateShape()
   std::uint32_t newX = std::numeric_limits<uint32_t>::max();
   std::uint32_t newY = std::numeric_limits<uint32_t>::max();
   bool foundRegion = false;
+  deskflow::MonitorList monitors;
   for (auto it = m_eiDevices.begin(); it != m_eiDevices.end(); it++) {
     auto idx = 0;
     struct ei_region *r;
@@ -570,12 +576,24 @@ void EiComputer::updateShape()
       newY = std::min(ei_region_get_y(r), newY);
       newW = std::max(ei_region_get_x(r) + ei_region_get_width(r), newW);
       newH = std::max(ei_region_get_y(r) + ei_region_get_height(r), newH);
+      monitors.push_back(
+          {std::to_string(monitors.size()), static_cast<int32_t>(ei_region_get_x(r)),
+           static_cast<int32_t>(ei_region_get_y(r)), static_cast<int32_t>(ei_region_get_width(r)),
+           static_cast<int32_t>(ei_region_get_height(r))}
+      );
     }
   }
 
   if (!foundRegion) {
     LOG_DEBUG("logical output size: unchanged (no region-reporting device present)");
     return;
+  }
+
+  deskflow::sortMonitors(monitors);
+  m_monitors = monitors;
+  for (size_t i = 0; i < m_monitors.size(); ++i) {
+    const auto &m = m_monitors[i];
+    LOG_DEBUG("monitor %zu '%s': %d,%d %dx%d", i, m.name.c_str(), m.x, m.y, m.w, m.h);
   }
 
   LOG_DEBUG("logical output size: %dx%d@%d.%d", newW, newH, newX, newY);

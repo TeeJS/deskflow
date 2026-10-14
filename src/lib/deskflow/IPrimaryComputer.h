@@ -9,6 +9,7 @@
 #pragma once
 
 #include "deskflow/KeyTypes.h"
+#include "deskflow/MonitorTypes.h"
 #include "deskflow/MouseTypes.h"
 
 //! Primary computer interface
@@ -172,6 +173,15 @@ public:
   the edges of the computer, typically the center.
   */
   virtual void getCursorCenter(int32_t &x, int32_t &y) const = 0;
+
+  //! Get monitors
+  /*!
+  Return every physical monitor of the primary computer, ordered top to
+  bottom then left to right, in the coordinate space of getShape().  The
+  list is empty when the platform cannot enumerate monitors; callers then
+  treat the whole shape as one monitor.
+  */
+  virtual deskflow::MonitorList monitors() const = 0;
 
   //@}
 };

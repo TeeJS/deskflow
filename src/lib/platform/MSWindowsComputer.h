@@ -91,6 +91,7 @@ public:
   int32_t getJumpZoneSize() const override;
   bool isAnyMouseButtonDown(uint32_t &buttonID) const override;
   void getCursorCenter(int32_t &x, int32_t &y) const override;
+  deskflow::MonitorList monitors() const override;
 
   // ISecondaryComputer overrides
   void fakeMouseButton(ButtonID id, bool press) override;
@@ -186,6 +187,7 @@ private: // HACK
 
   // update computer size cache
   void updateComputerShape();
+  void updateMonitors();
 
   // fix timer callback
   void handleFixes();
@@ -272,6 +274,9 @@ private:
 
   // true if system appears to have multiple monitors
   bool m_multimon = false;
+
+  // physical monitors making up the shape
+  deskflow::MonitorList m_monitors;
 
   // last mouse position
   int32_t m_xCursor = 0;

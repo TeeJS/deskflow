@@ -59,6 +59,11 @@ void PrimaryClient::getCursorCenter(int32_t &x, int32_t &y) const
   m_computer->getCursorCenter(x, y);
 }
 
+deskflow::MonitorList PrimaryClient::monitors() const
+{
+  return m_computer->monitors();
+}
+
 KeyModifierMask PrimaryClient::getToggleMask() const
 {
   return m_computer->pollActiveModifiers();
