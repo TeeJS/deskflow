@@ -14,6 +14,7 @@
 #include "deskflow/Clipboard.h"
 #include "deskflow/ClipboardTypes.h"
 #include "deskflow/KeyTypes.h"
+#include "deskflow/MonitorTypes.h"
 #include "deskflow/MouseTypes.h"
 #include "server/Config.h"
 
@@ -303,6 +304,18 @@ private:
   // process options from configuration
   void processOptions();
 
+  // resolve the configuration's monitor links against the primary
+  // computer's current monitors, and remember those monitors
+  void resolveMonitorLinks();
+
+  // shape of the monitor under x,y when client is the primary computer
+  // and its monitors are known, otherwise the client's whole shape.
+  // returns the monitor's index, or NoMonitor for the whole shape.
+  size_t activeShape(
+      const BaseClientProxy *client, int32_t x, int32_t y, int32_t &sx, int32_t &sy, int32_t &sw, int32_t &sh
+  ) const;
+  static constexpr size_t NoMonitor = static_cast<size_t>(-1);
+
   // event handlers
   void handleShapeChanged(BaseClientProxy *client);
   void handleClipboardGrabbed(const Event &event, BaseClientProxy *client);
@@ -381,6 +394,9 @@ private:
 
   // current configuration
   ServerConfig *m_config = nullptr;
+
+  // the primary computer's monitors as of the last resolveMonitorLinks()
+  deskflow::MonitorList m_primaryMonitors;
 
   // input filter (from m_config);
   InputFilter *m_inputFilter = nullptr;

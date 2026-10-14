@@ -9,11 +9,13 @@
 #include "server/Config.h"
 
 #include "base/IEventQueue.h"
+#include "base/Log.h"
 #include "common/KeyboardModifier.h"
 #include "deskflow/KeyMap.h"
 #include "deskflow/KeyTypes.h"
 #include "deskflow/OptionTypes.h"
 #include "net/SocketException.h"
+#include "server/MonitorLayout.h"
 #include "server/Server.h"
 
 #include <assert.h>
@@ -190,6 +192,105 @@ bool Config::disconnect(const std::string &srcName, Direction srcSide, float pos
   return true;
 }
 
+bool Config::addMonitorLink(const MonitorLink &link)
+{
+  if (!isComputer(link.srcName) || !isComputer(link.dstName)) {
+    return false;
+  }
+  if (link.srcMonitor <= 0 && link.dstMonitor <= 0) {
+    return false;
+  }
+  m_monitorLinks.push_back(link);
+  return true;
+}
+
+const std::vector<Config::MonitorLink> &Config::monitorLinks() const
+{
+  return m_monitorLinks;
+}
+
+size_t Config::resolveMonitorLinks(const std::string &name, const deskflow::MonitorList &monitors)
+{
+  m_resolved.clear();
+
+  const std::string canonical = getCanonicalName(name);
+  size_t resolved = 0;
+  for (const auto &link : m_monitorLinks) {
+    Interval src = link.srcInterval;
+    Interval dst = link.dstInterval;
+
+    if (link.srcMonitor > 0) {
+      if (!CaselessCmp::equal(getCanonicalName(link.srcName), canonical)) {
+        LOG_WARN("ignoring link on %s of '%s', it is not the server", dirName(link.srcSide), link.srcName.c_str());
+        continue;
+      }
+      if (static_cast<size_t>(link.srcMonitor) > monitors.size()) {
+        LOG_WARN(
+            "ignoring link on %s of '%s', it has no monitor %d", dirName(link.srcSide), link.srcName.c_str(),
+            link.srcMonitor
+        );
+        continue;
+      }
+      src = monitorlayout::span(monitors, link.srcMonitor - 1, link.srcSide);
+    }
+
+    if (link.dstMonitor > 0) {
+      if (!CaselessCmp::equal(getCanonicalName(link.dstName), canonical)) {
+        LOG_WARN("ignoring link to '%s', it is not the server", link.dstName.c_str());
+        continue;
+      }
+      if (static_cast<size_t>(link.dstMonitor) > monitors.size()) {
+        LOG_WARN("ignoring link to '%s', it has no monitor %d", link.dstName.c_str(), link.dstMonitor);
+        continue;
+      }
+      dst = monitorlayout::span(monitors, link.dstMonitor - 1, link.srcSide);
+    }
+
+    if (!connectResolved(link, src, dst)) {
+      LOG_WARN(
+          "ignoring link on %s of '%s' to '%s', it overlaps another link", dirName(link.srcSide), link.srcName.c_str(),
+          link.dstName.c_str()
+      );
+      continue;
+    }
+    ++resolved;
+  }
+  return resolved;
+}
+
+bool Config::connectResolved(const MonitorLink &link, const Interval &src, const Interval &dst)
+{
+  const std::string canonical = getCanonicalName(link.srcName);
+  CellEdge srcEdge(link.srcSide, src);
+  CellEdge dstEdge(link.dstName, link.srcSide, dst);
+
+  // never shadow a connection written directly in the configuration
+  if (auto index = m_map.find(canonical); index != m_map.end() && index->second.overlaps(srcEdge)) {
+    return false;
+  }
+  return m_resolved[canonical].add(srcEdge, dstEdge);
+}
+
+bool Config::parseMonitorSuffix(std::string &name, int &monitor)
+{
+  monitor = 0;
+  const auto at = name.rfind('@');
+  if (at == std::string::npos) {
+    return true;
+  }
+  const std::string digits = name.substr(at + 1);
+  if (digits.empty() || digits.find_first_not_of("0123456789") != std::string::npos) {
+    return false;
+  }
+  const int value = std::atoi(digits.c_str());
+  if (value <= 0) {
+    return false;
+  }
+  monitor = value;
+  name.erase(at);
+  return true;
+}
+
 void Config::setDeskflowAddress(const NetworkAddress &addr)
 {
   m_deskflowAddress = addr;
@@ -316,10 +417,17 @@ std::string Config::getNeighbor(const std::string &srcName, Direction srcSide, f
     return std::string();
   }
 
-  // find edge
+  // find edge, first among the configured links and then among the
+  // links resolved from monitor links
   const CellEdge *srcEdge;
   const CellEdge *dstEdge;
-  if (!index->second.getLink(srcSide, position, srcEdge, dstEdge)) {
+  bool found = index->second.getLink(srcSide, position, srcEdge, dstEdge);
+  if (!found) {
+    if (auto resolved = m_resolved.find(index->first); resolved != m_resolved.end()) {
+      found = resolved->second.getLink(srcSide, position, srcEdge, dstEdge);
+    }
+  }
+  if (!found) {
     // no neighbor
     return "";
   } else {
@@ -348,7 +456,12 @@ bool Config::hasNeighbor(const std::string &srcName, Direction srcSide, float st
     return false;
   }
 
-  return index->second.overlaps(CellEdge(srcSide, Interval(start, end)));
+  const CellEdge edge(srcSide, Interval(start, end));
+  if (index->second.overlaps(edge)) {
+    return true;
+  }
+  const auto resolved = m_resolved.find(index->first);
+  return resolved != m_resolved.end() && resolved->second.overlaps(edge);
 }
 
 Config::link_const_iterator Config::beginNeighbor(const std::string &srcName) const
@@ -436,6 +549,12 @@ bool Config::operator==(const Config &x) const
 
   // compare input filters
   if (m_inputFilter != x.m_inputFilter) {
+    return false;
+  }
+
+  // compare monitor links.  the connections resolved from them are
+  // derived state and are not compared.
+  if (m_monitorLinks != x.m_monitorLinks) {
     return false;
   }
 
@@ -685,6 +804,17 @@ void Config::readSectionLinks(ConfigReadContext &s)
       Interval srcInterval(s.parseInterval(srcArgs));
       Interval dstInterval(s.parseInterval(dstArgs));
 
+      // either end may name one monitor of a computer: `left@2 = foo'
+      // or `right = foo@2'
+      int srcMonitor = 0;
+      int dstMonitor = 0;
+      if (!parseMonitorSuffix(side, srcMonitor)) {
+        throw ServerConfigReadException(s, "invalid monitor in \"%{1}\"", side);
+      }
+      if (!parseMonitorSuffix(dstComputer, dstMonitor)) {
+        throw ServerConfigReadException(s, "invalid monitor in \"%{1}\"", dstComputer);
+      }
+
       // handle argument
       using enum Direction;
       Direction dir;
@@ -702,6 +832,10 @@ void Config::readSectionLinks(ConfigReadContext &s)
       }
       if (!isComputer(dstComputer)) {
         throw ServerConfigReadException(s, "unknown computer name \"%{1}\"", dstComputer);
+      }
+      if (srcMonitor > 0 || dstMonitor > 0) {
+        addMonitorLink({computer, dir, srcMonitor, srcInterval, dstComputer, dstMonitor, dstInterval});
+        continue;
       }
       if (!connect(
               computer, dir, srcInterval.first, srcInterval.second, dstComputer, dstInterval.first, dstInterval.second
@@ -1264,6 +1398,21 @@ std::ostream &operator<<(std::ostream &s, const Config &config)
          link != nend; ++link) {
       s << "\t\t" << Config::dirName(link->first.getSide()) << Config::formatInterval(link->first.getInterval())
         << " = " << link->second.getName().c_str() << Config::formatInterval(link->second.getInterval()) << std::endl;
+    }
+
+    for (const auto &link : config.m_monitorLinks) {
+      if (!CaselessCmp::equal(link.srcName, computer)) {
+        continue;
+      }
+      s << "\t\t" << Config::dirName(link.srcSide);
+      if (link.srcMonitor > 0) {
+        s << "@" << link.srcMonitor;
+      }
+      s << Config::formatInterval(link.srcInterval) << " = " << link.dstName.c_str();
+      if (link.dstMonitor > 0) {
+        s << "@" << link.dstMonitor;
+      }
+      s << Config::formatInterval(link.dstInterval) << std::endl;
     }
   }
   s << "end" << std::endl;
