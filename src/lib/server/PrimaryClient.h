@@ -7,6 +7,7 @@
 
 #pragma once
 
+#include "deskflow/MonitorTypes.h"
 #include "server/BaseClientProxy.h"
 
 namespace deskflow {
@@ -83,6 +84,13 @@ public:
   the edges of the computer, typically the center.
   */
   void getCursorCenter(int32_t &x, int32_t &y) const;
+
+  //! Get monitors
+  /*!
+  Return the primary computer's physical monitors.  See
+  IPrimaryComputer::monitors().
+  */
+  deskflow::MonitorList monitors() const;
 
   //! Get toggle key state
   /*!
