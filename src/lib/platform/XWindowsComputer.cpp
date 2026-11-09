@@ -762,6 +762,11 @@ void XWindowsComputer::getCursorCenter(int32_t &x, int32_t &y) const
   y = m_yCenter;
 }
 
+deskflow::MonitorList XWindowsComputer::monitors() const
+{
+  return m_monitors;
+}
+
 void XWindowsComputer::fakeMouseButton(ButtonID button, bool press)
 {
   const unsigned int xButton = mapButtonToX(button);
@@ -919,6 +924,7 @@ void XWindowsComputer::setShape(int32_t width, int32_t height)
   // we warp the pointer to the center of the first physical
   // screen instead of the logical screen.
   m_xinerama = false;
+  m_monitors.clear();
 #if HAVE_X11_EXTENSIONS_XINERAMA_H
   int eventBase;
   int errorBase;
@@ -927,6 +933,12 @@ void XWindowsComputer::setShape(int32_t width, int32_t height)
     XineramaScreenInfo *screens;
     screens = XineramaQueryScreens(m_display, &numScreens);
     if (screens != nullptr) {
+      for (int n = 0; n < numScreens; n++) {
+        m_monitors.push_back(
+            {std::to_string(screens[n].screen_number), screens[n].x_org, screens[n].y_org, screens[n].width,
+             screens[n].height}
+        );
+      }
       if (numScreens > 1) {
         m_xinerama = true;
         for (int n = 0; n < numScreens; n++) {
@@ -942,6 +954,11 @@ void XWindowsComputer::setShape(int32_t width, int32_t height)
     }
   }
 #endif
+  deskflow::sortMonitors(m_monitors);
+  for (size_t i = 0; i < m_monitors.size(); ++i) {
+    const auto &m = m_monitors[i];
+    LOG_DEBUG("monitor %zu '%s': %d,%d %dx%d", i, m.name.c_str(), m.x, m.y, m.w, m.h);
+  }
 
   LOG_DEBUG("center: %d,%d", m_xCenter, m_yCenter);
 }
