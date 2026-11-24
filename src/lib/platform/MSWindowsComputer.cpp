@@ -689,6 +689,11 @@ void MSWindowsComputer::getCursorCenter(int32_t &x, int32_t &y) const
   y = m_yCenter;
 }
 
+deskflow::MonitorList MSWindowsComputer::monitors() const
+{
+  return m_monitors;
+}
+
 void MSWindowsComputer::fakeMouseButton(ButtonID id, bool press)
 {
   m_desks->fakeMouseButton(id, press);
@@ -1441,8 +1446,36 @@ void MSWindowsComputer::updateComputerShape()
   // check for multiple monitors
   m_multimon = (m_w != GetSystemMetrics(SM_CXSCREEN) || m_h != GetSystemMetrics(SM_CYSCREEN));
 
+  updateMonitors();
+
   // tell the desks
   m_desks->setShape(m_x, m_y, m_w, m_h, m_xCenter, m_yCenter, m_multimon);
+}
+
+void MSWindowsComputer::updateMonitors()
+{
+  m_monitors.clear();
+  EnumDisplayMonitors(
+      nullptr, nullptr,
+      [](HMONITOR monitor, HDC, LPRECT, LPARAM data) -> BOOL {
+        MONITORINFOEXA info{};
+        info.cbSize = sizeof(info);
+        if (GetMonitorInfoA(monitor, &info) == 0) {
+          return TRUE;
+        }
+        const RECT &r = info.rcMonitor;
+        auto *list = reinterpret_cast<deskflow::MonitorList *>(data);
+        list->push_back({info.szDevice, r.left, r.top, r.right - r.left, r.bottom - r.top});
+        return TRUE;
+      },
+      reinterpret_cast<LPARAM>(&m_monitors)
+  );
+  deskflow::sortMonitors(m_monitors);
+
+  for (size_t i = 0; i < m_monitors.size(); ++i) {
+    const auto &m = m_monitors[i];
+    LOG_DEBUG("monitor %zu '%s': %d,%d %dx%d", i, m.name.c_str(), m.x, m.y, m.w, m.h);
+  }
 }
 
 void MSWindowsComputer::handleFixes()

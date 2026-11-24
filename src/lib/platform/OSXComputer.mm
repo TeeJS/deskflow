@@ -319,6 +319,11 @@ void OSXComputer::getCursorCenter(int32_t &x, int32_t &y) const
   y = m_yCenter;
 }
 
+deskflow::MonitorList OSXComputer::monitors() const
+{
+  return m_monitors;
+}
+
 uint32_t OSXComputer::registerHotKey(KeyID key, KeyModifierMask mask)
 {
   // get mac virtual key and modifier mask matching deskflow key and mask
@@ -1331,11 +1336,22 @@ bool OSXComputer::updateComputerShape()
     return false;
   }
 
-  // get smallest rect enclosing all display rects
+  // get smallest rect enclosing all display rects, and remember each one
   CGRect totalBounds = CGRectZero;
+  deskflow::MonitorList monitors;
   for (CGDisplayCount i = 0; i < displayCount; ++i) {
     CGRect bounds = CGDisplayBounds(displays[i]);
     totalBounds = CGRectUnion(totalBounds, bounds);
+    monitors.push_back(
+        {std::to_string(displays[i]), (int32_t)bounds.origin.x, (int32_t)bounds.origin.y, (int32_t)bounds.size.width,
+         (int32_t)bounds.size.height}
+    );
+  }
+  deskflow::sortMonitors(monitors);
+  m_monitors = monitors;
+  for (size_t i = 0; i < m_monitors.size(); ++i) {
+    const auto &m = m_monitors[i];
+    LOG_DEBUG("monitor %zu '%s': %d,%d %dx%d", i, m.name.c_str(), m.x, m.y, m.w, m.h);
   }
 
   // get shape of default computer

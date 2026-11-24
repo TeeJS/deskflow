@@ -23,6 +23,7 @@
 #include "server/ClientListener.h"
 #include "server/ClientProxy.h"
 #include "server/ClientProxyUnknown.h"
+#include "server/MonitorLayout.h"
 #include "server/PrimaryClient.h"
 
 #ifdef _WIN32
@@ -35,6 +36,30 @@
 #include <ctime>
 
 using namespace deskflow::server;
+
+namespace {
+
+// the side of a computer the cursor arrives on after leaving its
+// neighbour through side
+Direction oppositeDirection(Direction side)
+{
+  using enum Direction;
+  switch (side) {
+  case Left:
+    return Right;
+  case Right:
+    return Left;
+  case Top:
+    return Bottom;
+  case Bottom:
+    return Top;
+  case NoDirection:
+    break;
+  }
+  return NoDirection;
+}
+
+} // namespace
 
 //
 // Server
@@ -212,6 +237,9 @@ bool Server::setConfig(const ServerConfig &config)
   // close clients that are connected but being dropped from the
   // configuration.
   closeClients(config);
+
+  // turn links to and from single monitors into ordinary connections
+  resolveMonitorLinks();
 
   // cut over
   processOptions();
@@ -726,6 +754,12 @@ BaseClientProxy *Server::mapToNeighbor(BaseClientProxy *src, Direction srcSide, 
   assert(lastGoodComputer != nullptr);
   dst = lastGoodComputer;
 
+  // if entering the primary computer and its monitors are known, land
+  // on a monitor's edge rather than in a gap between monitors
+  if (dst == m_primaryClient && !m_primaryMonitors.empty()) {
+    monitorlayout::snapToEdge(m_primaryMonitors, oppositeDirection(srcSide), x, y);
+  }
+
   // if entering primary computer then be sure to move in far enough
   // to avoid the jump zone.  if entering a side that doesn't have
   // a neighbor (i.e. an asymmetrical side) then we don't need to
@@ -747,7 +781,7 @@ void Server::avoidJumpZone(const BaseClientProxy *dst, Direction dir, int32_t &x
   int32_t dy;
   int32_t dw;
   int32_t dh;
-  dst->getShape(dx, dy, dw, dh);
+  activeShape(dst, x, y, dx, dy, dw, dh);
   float t = mapToFraction(dst, dir, x, y);
   int32_t z = getJumpZoneSize(dst);
 
@@ -900,7 +934,7 @@ void Server::armSwitchTwoTap(int32_t x, int32_t y)
       int32_t ay;
       int32_t aw;
       int32_t ah;
-      m_active->getShape(ax, ay, aw, ah);
+      activeShape(m_active, x, y, ax, ay, aw, ah);
       int32_t tapZone = m_primaryClient->getJumpZoneSize();
       if (tapZone < m_switchTwoTapZone) {
         tapZone = m_switchTwoTapZone;
@@ -979,12 +1013,12 @@ uint32_t Server::getCorner(const BaseClientProxy *client, int32_t x, int32_t y, 
 {
   assert(client != nullptr);
 
-  // get client computer shape
+  // get the shape of the monitor x,y is on, or the whole computer
   int32_t ax;
   int32_t ay;
   int32_t aw;
   int32_t ah;
-  client->getShape(ax, ay, aw, ah);
+  const size_t monitor = activeShape(client, x, y, ax, ay, aw, ah);
 
   // check for x,y on the left or right
   int32_t xSide;
@@ -1004,6 +1038,18 @@ uint32_t Server::getCorner(const BaseClientProxy *client, int32_t x, int32_t y, 
     ySide = 1;
   } else {
     ySide = 0;
+  }
+
+  // an edge shared with another monitor is not an edge of the computer,
+  // so it cannot form a corner
+  if (monitor != NoMonitor) {
+    using enum Direction;
+    if (xSide != 0 && monitorlayout::hasMonitorBeyond(m_primaryMonitors, monitor, xSide < 0 ? Left : Right, y)) {
+      xSide = 0;
+    }
+    if (ySide != 0 && monitorlayout::hasMonitorBeyond(m_primaryMonitors, monitor, ySide < 0 ? Top : Bottom, x)) {
+      ySide = 0;
+    }
   }
 
   // if against the left or right then check if y is within size
@@ -1131,6 +1177,30 @@ void Server::processOptions()
   m_protocol = Settings::networkProtocol();
 }
 
+void Server::resolveMonitorLinks()
+{
+  m_primaryMonitors = m_primaryClient->monitors();
+  const size_t resolved = m_config->resolveMonitorLinks(m_primaryClient->getName(), m_primaryMonitors);
+  LOG_DEBUG("resolved monitor links against %zu monitors: %zu", m_primaryMonitors.size(), resolved);
+}
+
+size_t Server::activeShape(
+    const BaseClientProxy *client, int32_t x, int32_t y, int32_t &sx, int32_t &sy, int32_t &sw, int32_t &sh
+) const
+{
+  client->getShape(sx, sy, sw, sh);
+  if (client != m_primaryClient || m_primaryMonitors.empty()) {
+    return NoMonitor;
+  }
+  const size_t index = monitorlayout::monitorAt(m_primaryMonitors, x, y);
+  const auto &m = m_primaryMonitors[index];
+  sx = m.x;
+  sy = m.y;
+  sw = m.w;
+  sh = m.h;
+  return index;
+}
+
 void Server::handleShapeChanged(BaseClientProxy *client)
 {
   if (!m_clientSet.contains(client)) {
@@ -1153,6 +1223,10 @@ void Server::handleShapeChanged(BaseClientProxy *client)
 
   // handle resolution change to primary computer
   if (client == m_primaryClient) {
+    // the monitors may have moved, so the edges linked to them move too
+    resolveMonitorLinks();
+    m_primaryClient->reconfigure(getActivePrimarySides());
+
     if (client == m_active) {
       onMouseMovePrimary(m_x, m_y);
     } else {
@@ -1630,13 +1704,20 @@ bool Server::onMouseMovePrimary(int32_t x, int32_t y)
   m_x = x;
   m_y = y;
 
-  // get computer shape
+  // get the shape of the monitor the cursor is on, or of the whole
+  // computer when its monitors are unknown
   int32_t ax;
   int32_t ay;
   int32_t aw;
   int32_t ah;
-  m_active->getShape(ax, ay, aw, ah);
+  const size_t monitor = activeShape(m_active, x, y, ax, ay, aw, ah);
   int32_t zoneSize = getJumpZoneSize(m_active);
+
+  // an edge of that monitor only counts as an edge of the computer
+  // where no other monitor continues past it
+  const auto isOuterEdge = [this, monitor](Direction side, int32_t along) {
+    return monitor == NoMonitor || !monitorlayout::hasMonitorBeyond(m_primaryMonitors, monitor, side, along);
+  };
 
   // clamp position to computer
   int32_t xc = x;
@@ -1660,17 +1741,17 @@ bool Server::onMouseMovePrimary(int32_t x, int32_t y)
   auto dirv = NoDirection;
   int32_t xh = x;
   int32_t yv = y;
-  if (x < ax + zoneSize) {
+  if (x < ax + zoneSize && isOuterEdge(Left, y)) {
     xh -= zoneSize;
     dirh = Left;
-  } else if (x >= ax + aw - zoneSize) {
+  } else if (x >= ax + aw - zoneSize && isOuterEdge(Right, y)) {
     xh += zoneSize;
     dirh = Right;
   }
-  if (y < ay + zoneSize) {
+  if (y < ay + zoneSize && isOuterEdge(Top, x)) {
     yv -= zoneSize;
     dirv = Top;
-  } else if (y >= ay + ah - zoneSize) {
+  } else if (y >= ay + ah - zoneSize && isOuterEdge(Bottom, x)) {
     yv += zoneSize;
     dirv = Bottom;
   }

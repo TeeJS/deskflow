@@ -10,6 +10,7 @@
 #include "deskflow/ClipboardTypes.h"
 #include "deskflow/IComputer.h"
 #include "deskflow/KeyTypes.h"
+#include "deskflow/MonitorTypes.h"
 #include "deskflow/MouseTypes.h"
 #include "deskflow/OptionTypes.h"
 
@@ -251,6 +252,13 @@ public:
   the edges of the computer, typically the center.
   */
   void getCursorCenter(int32_t &x, int32_t &y) const;
+
+  //! Get monitors
+  /*!
+  Return the primary computer's physical monitors.  See
+  IPrimaryComputer::monitors().
+  */
+  deskflow::MonitorList monitors() const;
 
   //! Get the active modifiers
   /*!
